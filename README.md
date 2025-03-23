@@ -2,8 +2,6 @@
 
 A lightweight tool to lookup US congressional representatives using the [US Census Geocoding API](https://geocoding.geo.census.gov/geocoder/).
 
-![Screenshot](screenshot.png)
-
 ## Features
 - Find House representatives and Senators by address
 - Display contact information
