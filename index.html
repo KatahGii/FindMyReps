@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Find Your Representative</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">  
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header>
+    <h1>Find Your Representative</h1>
+  </header>
+
+  <!-- Welcome card -->
+  <div id="welcome-card" class="card" style="text-align: center;">
+  <p><strong>WELCOME!</strong></p>
+  <p>We couldn’t find a user-friendly site for finding representatives—so <strong>we built one ourselves!</strong></p>
+  <p>In today’s political climate, it’s <strong>more important than ever</strong> to have an easy way to connect with your elected officials.</p>
+  <p><strong>We hope this tool fills that need.</strong> Share it with friends and use it when teaching people how to find their reps, so they can quickly pull up the info whenever they need it. Enjoy!</p>
+</div>
+
+  <!-- Address form card -->
+  <div class="container card">
+    <h2>Enter Your Address</h2>
+    <input type="text" id="street" placeholder="Street Address">
+    <input type="text" id="city" placeholder="City">
+    <input type="text" id="state" placeholder="State (e.g., IN)">
+    <input type="text" id="zip" placeholder="ZIP Code">
+    <button onclick="findReps()">Find My Reps</button>
+    <div id="result"></div>
+  </div>
+
+  <footer>
+    <p>Data courtesy of the U.S. Census Bureau and Sponsored by Hoosier Resistance Front. Thank you!</p>
+    <footer style="text-align:center; margin-top:40px;">
+</footer>
+  </footer>
+
+  <script>
+    let csvData = null;
+
+    // Simple CSV parser that handles quoted fields
+    function parseCSV(text) {
+      const rows = [];
+      let currentRow = [];
+      let currentValue = "";
+      let insideQuotes = false;
+      for (let i = 0; i < text.length; i++) {
+        const char = text[i];
+        if (char === '"') {
+          if (insideQuotes && text[i + 1] === '"') {
+            currentValue += '"';
+            i++;
+          } else {
+            insideQuotes = !insideQuotes;
+          }
+        } else if (char === "," && !insideQuotes) {
+          currentRow.push(currentValue);
+          currentValue = "";
+        } else if ((char === "\n" || char === "\r") && !insideQuotes) {
+          if (currentValue || currentRow.length) {
+            currentRow.push(currentValue);
+            rows.push(currentRow);
+            currentRow = [];
+            currentValue = "";
+          }
+          if (char === "\r" && text[i+1] === "\n") i++;
+        } else {
+          currentValue += char;
+        }
+      }
+      if (currentValue || currentRow.length) {
+        currentRow.push(currentValue);
+        rows.push(currentRow);
+      }
+      return rows;
+    }
+
+    // Load the CSV file (NEWREPS.csv) on page load
+    function loadCSV() {
+      return fetch("NEWREPS.csv")
+        .then(response => response.text())
+        .then(text => { csvData = text; })
+        .catch(error => console.error("Error loading CSV:", error));
+    }
+    window.onload = loadCSV;
+
+    // Normalize District string: keep the dash, remove leading zeros after dash.
+    function normalizeDistrict(str) {
+      let upper = str.toUpperCase().trim();
+      if (!upper.includes("-")) {
+        return upper;
+      }
+      let [statePart, distPart] = upper.split("-");
+      distPart = distPart.replace(/^0+/, "");
+      if (!distPart) distPart = "0";
+      return `${statePart}-${distPart}`;
+    }
+
+    // Find legislators from the CSV based on state and district number.
+    function findLegislatorsInCSV(state, districtNumber) {
+      if (!csvData) return { rep: null, senators: [] };
+      const rows = parseCSV(csvData);
+      if (rows.length < 2) return { rep: null, senators: [] };
+
+      // Map CSV data based on header names.
+      const headers = rows[0].map(h => h.trim());
+      const dataRows = rows.slice(1).map(row => {
+        const obj = {};
+        headers.forEach((header, i) => {
+          obj[header] = row[i] ? row[i].trim() : "";
+        });
+        return obj;
+      });
+
+      const normalizedInput = normalizeDistrict(`${state}-${districtNumber}`);
+      let houseRep = null;
+      const senators = [];
+
+      dataRows.forEach(row => {
+        const chamber = row["Chamber"] || "";
+        const csvDistrict = row["District"] || "";
+        const normalizedCSV = normalizeDistrict(csvDistrict);
+
+        if (chamber.toLowerCase() === "house") {
+          if (normalizedCSV === normalizedInput) {
+            houseRep = row;
+          }
+        } else if (chamber.toLowerCase() === "senate") {
+          if (normalizeDistrict(csvDistrict) === state.toUpperCase()) {
+            senators.push(row);
+          }
+        }
+      });
+
+      return { rep: houseRep, senators };
+    }
+
+    async function findReps() {
+      const street = document.getElementById("street").value;
+      const city = document.getElementById("city").value;
+      const state = document.getElementById("state").value.toUpperCase();
+      const zip = document.getElementById("zip").value;
+      const resultDiv = document.getElementById("result");
+
+      if (!street || !city || !state || !zip) {
+        alert("Please fill in all fields.");
+        return;
+      }
+
+      // Hide the welcome card once the user submits
+      const welcomeCard = document.getElementById("welcome-card");
+      if (welcomeCard) {
+        welcomeCard.style.display = "none";
+      }
+
+      resultDiv.innerHTML = "<p>Fetching your congressional district...</p>";
+
+      // Use a CORS proxy to call the Census Bureau geocoder.
+      const proxyUrl = "https://corsproxy.io/?";
+      const censusUrl = `${proxyUrl}https://geocoding.geo.census.gov/geocoder/geographies/address?street=${encodeURIComponent(street)}&city=${encodeURIComponent(city)}&state=${state}&zip=${zip}&benchmark=Public_AR_Current&vintage=Current_Current&layers=Congressional%20Districts&format=json`;
+
+      try {
+        const response = await fetch(censusUrl);
+        const censusData = await response.json();
+
+        if (
+          !censusData.result ||
+          !censusData.result.addressMatches ||
+          censusData.result.addressMatches.length === 0
+        ) {
+          resultDiv.innerHTML = "<p>No district found. Please check your address.</p>";
+          return;
+        }
+
+        const districtNumber =
+          censusData.result.addressMatches[0]?.geographies?.["119th Congressional Districts"]?.[0]?.BASENAME;
+
+        if (!districtNumber) {
+          resultDiv.innerHTML = "<p>Congressional district not found.</p>";
+          return;
+        }
+
+        resultDiv.innerHTML = `<p>Your district is: ${state}-${districtNumber}. Looking up your representatives...</p>`;
+
+        const { rep, senators } = findLegislatorsInCSV(state, districtNumber);
+        let outputHtml = "";
+
+        if (rep) {
+          outputHtml += `
+            <div class="official-block">
+              <h3>Your Representative</h3>
+              <p><strong>Name:</strong> ${rep["Name"] || "N/A"}</p>
+              <p><strong>Party:</strong> ${rep["Party"] || "N/A"}</p>
+              <p><strong>District:</strong> ${rep["District"] || "N/A"}</p>
+              <p><strong>Capitol Phone:</strong> ${rep["Capitol Phone"] || "N/A"}</p>
+              <p><strong>District Phone:</strong> ${rep["district_voice"] || "N/A"}</p>
+              <p><strong>Office Address:</strong> ${rep["Office Address"] || "N/A"}</p>
+              <p><strong>Webmail URL:</strong> <a href="${rep["Webmail URL"] || "#"}" target="_blank">
+                ${rep["Webmail URL"] || "N/A"}</a></p>
+            </div>
+          `;
+        } else {
+          outputHtml += `<p>No House representative found for district ${state}-${districtNumber}.</p>`;
+        }
+
+        if (senators.length > 0) {
+          outputHtml += `<h3>Your Senators</h3>`;
+          senators.forEach((sen, index) => {
+            outputHtml += `
+              <div class="official-block">
+                <h4>Senator ${index + 1}</h4>
+                <p><strong>Name:</strong> ${sen["Name"] || "N/A"}</p>
+                <p><strong>Party:</strong> ${sen["Party"] || "N/A"}</p>
+                <p><strong>District:</strong> ${sen["District"] || "N/A"}</p>
+                <p><strong>Capitol Phone:</strong> ${sen["Capitol Phone"] || "N/A"}</p>
+                <p><strong>District Phone:</strong> ${sen["district_voice"] || "N/A"}</p>
+                <p><strong>Office Address:</strong> ${sen["Office Address"] || "N/A"}</p>
+                <p><strong>Webmail URL:</strong> <a href="${sen["Webmail URL"] || "#"}" target="_blank">
+                  ${sen["Webmail URL"] || "N/A"}</a></p>
+              </div>
+            `;
+          });
+        } else {
+          outputHtml += `<p>No senators found for state ${state}.</p>`;
+        }
+
+        resultDiv.innerHTML = outputHtml;
+      } catch (error) {
+        console.error("Error:", error);
+        resultDiv.innerHTML = "<p>An error occurred. Please try again.</p>";
+      }
+    }
+  </script>
+</body>
+</html>
